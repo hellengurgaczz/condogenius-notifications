@@ -1,7 +1,11 @@
 package main
 
 import (
+	"Condogenius-notifications/db"
+	"Condogenius-notifications/models"
+	"Condogenius-notifications/repository"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -14,38 +18,49 @@ import (
 )
 
 func main() {
-	// Configurar a conexão com o banco de dados MySQL
-	db, err := db.connectDB()
-	defer db.Close()
+
+	// Conexão com banco de dados
+	db, err := db.ConnectDB()
+	if err != nil {
+		log.Fatal("Houve algum problema na conexão com banco de dados")
+	} else {
+		fmt.Println("Conexão com banco de dados estabelecida")
+	}
 
 	ctx := context.Background()
-
-	// Crie um cliente do Pub/Sub
 	client, err := pubsub.NewClient(ctx, "handy-courage-388421")
 	if err != nil {
 		log.Fatalf("Falha ao criar o cliente do Pub/Sub: %v", err)
 	}
-
-	// Crie uma assinatura para receber mensagens
 	subscription := client.Subscription("send-notifications-sub")
 
-	// Crie um canal para capturar sinais de interrupção
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-	// Execute o loop para receber mensagens continuamente
 	for {
 		select {
 		case <-interrupt:
-			// Encerre o programa caso receba um sinal de interrupção
 			fmt.Println("Programa encerrado.")
 			return
 		default:
 			err := subscription.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
-				// Processar a mensagem recebida
 				fmt.Printf("Mensagem Recebida: %s\n", string(msg.Data))
 
-				// Confirme o recebimento da mensagem (marcando-a como concluída)
+				var notification models.Notification
+				err := json.Unmarshal(msg.Data, &notification)
+				if err != nil {
+					log.Printf("Erro ao converter a mensagem em Notification: %v", err)
+					msg.Nack()
+					return
+				}
+
+				err = repository.Save(db, notification)
+				if err != nil {
+					log.Printf("Erro ao salvar a mensagem no banco de dados: %v", err)
+					msg.Nack()
+					return
+				}
+
 				msg.Ack()
 			})
 			if err != nil {
